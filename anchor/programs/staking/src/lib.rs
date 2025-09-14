@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-use anchor_lang::{prelude::*, solana_program::stake::instruction::StakeError};
+use anchor_lang::prelude::*;
 
 declare_id!("FqzkXZdwYjurnUKetJCAvaUw5WAqbwzU6gZEwydeEfqS");
 
@@ -12,6 +12,8 @@ const SECONDS_PER_DAY: u64 = 86400;
 
 #[program]
 pub mod staking {
+    use anchor_lang::system_program;
+
     use super::*;
 
     pub fn create_pda_account(ctx: Context<CreatePdaAccount>) -> Result<()> {
@@ -19,7 +21,7 @@ pub mod staking {
         let clock = Clock::get()?;
 
         pda_account.owner = ctx.accounts.payer.key();
-        pda_account.staked_account = 0;
+        pda_account.staked_amount = 0;
         pda_account.total_points = 0;
         pda_account.last_updated_time = clock.unix_timestamp;
         pda_account.bump = ctx.bumps.pda_account;
@@ -32,6 +34,30 @@ pub mod staking {
 
         let pda_account = &mut ctx.accounts.pda_account;
         let clock = Clock::get()?;
+
+        update_points(pda_account, clock.unix_timestamp as u64);
+
+        //user => PDA transfer
+        let cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.user.to_account_info(),
+                to: ctx.accounts.pda_account.to_account_info(),
+            },
+        );
+        system_program::transfer(cpi_context, amount)?;
+
+        pda_account.staked_amount = pda_account
+            .staked_amount
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+
+        msg!(
+            "Staked Lamports are: {}, Total Staked Lamports are: {}, Total earned points are: {}",
+            amount,
+            pda_account.staked_amount,
+            pda_account.total_points / POINTS_PER_SOL_PER_DAY
+        );
 
         Ok(())
     }
@@ -47,6 +73,38 @@ pub mod staking {
     pub fn get_points_fn(ctx: Context<CreatePdaAccount>) -> Result<()> {
         Ok(())
     }
+}
+
+//functions
+fn update_points(pda_account: &mut StakeAccount, current_time: u64) -> Result<()> {
+    let start_time = current_time
+        .checked_sub(pda_account.last_updated_time as u64)
+        .ok_or(Error::InvalidTimestamp)?;
+
+    if start_time > 0 && pda_account.staked_amount > 0 {
+        let new_points = calc_earned_points(pda_account.staked_amount, start_time)?;
+        pda_account.total_points = pda_account
+            .total_points
+            .checked_add(new_points)
+            .ok_or(Error::Overflow)?;
+    }
+    pda_account.last_updated_time = current_time as i64;
+
+    Ok(())
+}
+
+fn calc_earned_points(staked_amount: u64, start_time: u64) -> Result<u64> {
+    let points = (staked_amount as u128)
+        .checked_mul(start_time as u128)
+        .ok_or(Error::Overflow)?
+        .checked_mul(POINTS_PER_SOL_PER_DAY as u128)
+        .ok_or(Error::Overflow)?
+        .checked_div(LAMPORTS_PER_SOL as u128)
+        .ok_or(Error::Overflow)?
+        .checked_div(SECONDS_PER_DAY as u128)
+        .ok_or(Error::Overflow)?;
+
+    Ok(points as u64)
 }
 
 //accounts
@@ -88,7 +146,7 @@ pub struct Stake<'info> {
 #[derive(InitSpace)]
 pub struct StakeAccount {
     pub owner: Pubkey,
-    pub staked_account: u64,
+    pub staked_amount: u64,
     pub total_points: u64,
     pub last_updated_time: i64,
     pub bump: u8,
