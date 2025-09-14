@@ -62,7 +62,50 @@ pub mod staking {
         Ok(())
     }
 
-    pub fn unstake_fn(ctx: Context<CreatePdaAccount>, amount: u64) -> Result<()> {
+    pub fn unstake_fn(ctx: Context<Unstake>, amount: u64) -> Result<()> {
+        require!(amount > 0, Error::InvalidAmount);
+
+        let pda_account = &mut ctx.accounts.pda_account;
+        let clock = Clock::get()?;
+
+        require!(
+            pda_account.staked_amount >= amount,
+            Error::InsufficientStake
+        );
+
+        update_points(pda_account, clock.unix_timestamp as u64)?;
+
+        //PDA => user
+        let seeds = &[
+            b"client",
+            ctx.accounts.user.key().as_ref(),
+            &[pda_account.bump],
+        ];
+
+        let signer = &[&seeds[..]];
+
+        let cpi_context = CpiContext::new_with_signer(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.pda_account.to_account_info(),
+                to: ctx.accounts.user.to_account_info(),
+            },
+            signer,
+        );
+        system_program::transfer(cpi_context, amount)?;
+
+        pda_account.staked_amount = pda_account
+            .staked_amount
+            .checked_sub(amount)
+            .ok_or(Error::Underflow)?;
+
+        msg!(
+            "Unstaked Lamports are: {}, Remaining Staked Lamports are: {}, Total earned points are: {}",
+            amount,
+            pda_account.staked_amount,
+            pda_account.total_points / POINTS_PER_SOL_PER_DAY
+        );
+
         Ok(())
     }
 
@@ -127,6 +170,22 @@ pub struct CreatePdaAccount<'info> {
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"client", user.key().as_ref()],
+        bump,
+        constraint = pda_account.owner == user.key() @ Error::Unauthorized
+    )]
+    pub pda_account: Account<'info, StakeAccount>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Unstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
