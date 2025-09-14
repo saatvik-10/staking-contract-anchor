@@ -200,6 +200,34 @@ pub struct Unstake<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct ClaimPoints<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"client", user.key().as_ref()],
+        bump,
+        constraint = pda_account.owner == user.key() @ Error::Unauthorized
+    )]
+    pub pda_account: Account<'info, StakeAccount>,
+}
+
+#[derive(Accounts)]
+pub struct GetPoints<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"client", user.key().as_ref()],
+        bump,
+        constraint = pda_account.owner == user.key() @ Error::Unauthorized
+    )]
+    pub pda_account: Account<'info, StakeAccount>,
+}
+
 //structs
 #[account]
 #[derive(InitSpace)]
