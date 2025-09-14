@@ -109,11 +109,41 @@ pub mod staking {
         Ok(())
     }
 
-    pub fn claim_points_fn(ctx: Context<CreatePdaAccount>) -> Result<()> {
+    pub fn claim_points_fn(ctx: Context<ClaimPoints>) -> Result<()> {
+        let pda_account = &mut ctx.accounts.pda_account;
+        let clock = Clock::get()?;
+
+        update_points(pda_account, clock.unix_timestamp as u64)?;
+
+        let claim_points = pda_account.total_points / POINTS_PER_SOL_PER_DAY;
+
+        msg!("User can claim {} points", claim_points);
+
         Ok(())
     }
 
-    pub fn get_points_fn(ctx: Context<CreatePdaAccount>) -> Result<()> {
+    pub fn get_points_fn(ctx: Context<GetPoints>) -> Result<()> {
+        let pda_account = &mut ctx.accounts.pda_account;
+        let clock = Clock::get()?;
+
+        let start_time = clock
+            .unix_timestamp
+            .checked_sub(pda_account.last_updated_time)
+            .ok_or(Error::InvalidTimestamp)? as u64;
+
+        let new_points = calc_earned_points(pda_account.staked_amount, start_time);
+
+        let curr_total_points = pda_account
+            .total_points
+            .checked_add(new_points)
+            .ok_or(Error::Overflow)?;
+
+        msg!(
+            "Current available points are {}, Total staked amount is {}",
+            curr_total_points / POINTS_PER_SOL_PER_DAY,
+            pda_account.staked_amount / LAMPORTS_PER_SOL
+        );
+
         Ok(())
     }
 }
